@@ -1,0 +1,16 @@
+# 构建产物
+app/build/
+*.apk
+*.aab
+
+# 签名密钥 —— 绝对不要提交
+*.keystore
+*.jks
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+*.iml
+.gradle/
