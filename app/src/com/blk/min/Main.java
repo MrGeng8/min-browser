@@ -2,11 +2,15 @@ package com.blk.min;
 
 import android.app.Activity;
 import android.app.Dialog;
+import android.app.DownloadManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.text.InputType;
 import android.view.KeyEvent;
 import android.view.View;
@@ -14,6 +18,9 @@ import android.view.ViewGroup;
 import android.view.Window;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
+import android.webkit.CookieManager;
+import android.webkit.DownloadListener;
+import android.webkit.URLUtil;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -22,6 +29,7 @@ import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import java.util.ArrayList;
 
@@ -32,6 +40,7 @@ import java.util.ArrayList;
  *  2) 无 AndroidX、无 layout 资源，dex 极小
  *  3) 可作 http/https 默认处理器
  *  4) 搜索引擎用 Bing（cn.bing.com，国内直连）
+ *  5) 下载交给系统 DownloadManager，不自己写 IO
  */
 public class Main extends Activity {
 
@@ -41,6 +50,19 @@ public class Main extends Activity {
 
     /** 国内可直连的 Bing；原来的 duckduckgo 在国内不可达 */
     static final String SEARCH = "https://cn.bing.com/search?q=";
+
+    /** 运行时申请存储权限的请求码（仅 Android 6~9 需要） */
+    static final int REQ_WRITE = 1;
+
+    /**
+     * WebView 自己能处理的 scheme，放行；其余甩给系统。
+     * intent: 必须放行 —— WebView 内部会解析 intent:// 并拉起对应 App，
+     * 用 ACTION_VIEW 硬传会解析失败（需要 Intent.parseUri）。
+     */
+    static final String[] OWN_SCHEMES = {
+        "http:", "https:", "file:", "content:", "data:", "blob:", "about:",
+        "javascript:", "intent:"
+    };
 
     static final String BLANK =
         "<html style=\"background:#000\"><head>" +
@@ -81,6 +103,8 @@ public class Main extends Activity {
     int cur = -1;
     float d;
     int pad;
+    /** 等待存储权限的下载请求：{url, userAgent, contentDisposition, mime, referer} */
+    String[] pend;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -199,7 +223,17 @@ public class Main extends Activity {
 
         v.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView w, String u) {
-                return false;
+                if (u == null) return false;
+                for (int i = 0; i < OWN_SCHEMES.length; i++) {
+                    if (u.startsWith(OWN_SCHEMES[i])) return false;
+                }
+                // tel: mailto: market: weixin: 之类甩给系统；否则点了没反应
+                try {
+                    startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(u)));
+                } catch (Exception e) {
+                    toast("无法打开：" + u);
+                }
+                return true;
             }
             @Override public void onPageFinished(WebView w, String u) {
                 Tab t = tabOf(w);
@@ -222,6 +256,12 @@ public class Main extends Activity {
                 // 无 <title> 的空白页会被 Chromium 用网址当标题，需过滤
                 if (tt.length() == 0 || tt.startsWith("about:")) return;
                 t.title = tt;
+            }
+        });
+        // 没有 DownloadListener 时，附件类链接会被 WebView 静默丢弃（点了没反应）
+        v.setDownloadListener(new DownloadListener() {
+            @Override public void onDownloadStart(String u, String ua, String cd, String mime, long len) {
+                startDownload(u, ua, cd, mime, v.getUrl());
             }
         });
         return v;
@@ -329,6 +369,19 @@ public class Main extends Activity {
         });
         box.addView(add);
 
+        TextView dl = row("↓  下载内容", FG, 15);
+        dl.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                dlg.dismiss();
+                try {
+                    startActivity(new Intent(DownloadManager.ACTION_VIEW_DOWNLOADS));
+                } catch (Exception e) {
+                    toast("系统里没有下载管理器");
+                }
+            }
+        });
+        box.addView(dl);
+
         TextView close = row("✕  关闭当前标签页", 0xFF9A9A9A, 15);
         close.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { closeTab(cur); dlg.dismiss(); }
@@ -356,6 +409,74 @@ public class Main extends Activity {
         tv.setTextSize(size);
         tv.setPadding(pad * 3, pad * 3, pad * 3, pad * 3);
         return tv;
+    }
+
+    // ================= 下载 =================
+
+    /** Android 6~9 写公共下载目录需要运行时授权；10+ 由系统 DownloadProvider 落盘，不需要 */
+    void startDownload(String u, String ua, String cd, String mime, String ref) {
+        if (Build.VERSION.SDK_INT >= 23 && Build.VERSION.SDK_INT < 29
+                && checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                   != PackageManager.PERMISSION_GRANTED) {
+            pend = new String[]{u, ua, cd, mime, ref};
+            requestPermissions(
+                    new String[]{android.Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQ_WRITE);
+            return;
+        }
+        enqueue(u, ua, cd, mime, ref);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int rc, String[] p, int[] g) {
+        if (rc == REQ_WRITE) {
+            String[] q = pend;
+            pend = null;
+            if (q == null) return;
+            if (g != null && g.length > 0 && g[0] == PackageManager.PERMISSION_GRANTED) {
+                enqueue(q[0], q[1], q[2], q[3], q[4]);
+            } else {
+                toast("未授予存储权限，下载已取消");
+            }
+            return;
+        }
+        super.onRequestPermissionsResult(rc, p, g);
+    }
+
+    void enqueue(String u, String ua, String cd, String mime, String ref) {
+        String name = URLUtil.guessFileName(u, cd, mime);
+        try {
+            DownloadManager.Request r = new DownloadManager.Request(Uri.parse(u));
+            if (mime != null && mime.length() > 0) r.setMimeType(mime);
+            // 带上 UA / Cookie / Referer：论坛附件、网盘直链缺了这三个多半 403
+            if (ua != null && ua.length() > 0) r.addRequestHeader("User-Agent", ua);
+            String ck = CookieManager.getInstance().getCookie(u);
+            if (ck != null && ck.length() > 0) r.addRequestHeader("Cookie", ck);
+            if (ref != null && ref.startsWith("http")) r.addRequestHeader("Referer", ref);
+            r.setTitle(name);
+            r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            r.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name);
+
+            DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+            if (dm == null) { toast("系统下载服务不可用"); return; }
+            dm.enqueue(r);
+            toast("↓ " + name);
+        } catch (Exception e) {
+            toast("下载失败：" + e.getMessage());
+        }
+    }
+
+    /** 纯黑 Toast：系统默认 Toast 是深灰底，不符合本项目配色 */
+    void toast(String s) {
+        Toast t = new Toast(this);
+        TextView tv = new TextView(this);
+        tv.setText(s);
+        tv.setTextColor(FG);
+        tv.setTextSize(13);
+        tv.setBackgroundColor(BLACK);
+        tv.setPadding(pad * 3, pad * 2, pad * 3, pad * 2);
+        t.setView(tv);
+        t.setDuration(Toast.LENGTH_SHORT);
+        t.show();
     }
 
     // ================= 导航 =================

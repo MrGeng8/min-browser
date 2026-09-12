@@ -1,11 +1,12 @@
 # Min Browser
 
-> **16.5 KB 的安卓浏览器。零依赖，纯黑，省电。**
+> **20.5 KB 的安卓浏览器。零依赖，纯黑，省电。**
 
 一个给 AMOLED 屏幕和极客用的极简浏览器。不打包任何浏览器内核，直接复用系统 WebView —— 所以它小到不像一个 App。
 
-![APK](https://img.shields.io/badge/APK-16.5%20KB-blue)
-![dex](https://img.shields.io/badge/dex-14.5%20KB-blue)
+![APK](https://img.shields.io/badge/APK-20.5%20KB-blue)
+![dex](https://img.shields.io/badge/dex-17.5%20KB-blue)
+![version](https://img.shields.io/badge/version-2.2-blue)
 ![minSdk](https://img.shields.io/badge/minSdk-21-green)
 ![targetSdk](https://img.shields.io/badge/targetSdk-28-green)
 ![License](https://img.shields.io/badge/license-MIT-orange)
@@ -24,12 +25,13 @@
 最终 APK 里只有 4 个文件：
 
 ```
-AndroidManifest.xml      3,112 字节
-classes.dex             14,496 字节
-res/mipmap-xxxhdpi/ic.png  771 字节
-resources.arsc             576 字节
-                        ─────────
-                        16,857 字节  (16.5 KB)
+AndroidManifest.xml          3,340 字节
+classes.dex                 17,956 字节
+res/mipmap-xxxhdpi/ic.png      771 字节
+resources.arsc                 576 字节
+                            ─────────
+                            22,643 字节（未压缩）
+APK 实际大小（zip 压缩后）    20,953 字节  (20.5 KB)
 ```
 
 ## 实测数据
@@ -38,9 +40,9 @@ resources.arsc             576 字节
 
 | 指标 | 数值 | 说明 |
 |---|---|---|
-| **APK 体积** | **16,857 字节** | 约等于一张缩略图 |
+| **APK 体积** | **20,953 字节** | 约等于一张缩略图 |
 | **应用自身 Dalvik Heap** | **≈ 1.3 MB** | `dumpsys meminfo` 实测 |
-| dex 大小 | 14,496 字节 | |
+| dex 大小 | 17,956 字节 | |
 | 整进程 PSS | ≈ 67 MB | 绝大部分是系统 WebView 引擎，**系统已有、多应用共享**，Min 不额外带来引擎开销 |
 
 > 对比：同机上的 DeepSeek App 整进程 PSS ≈ 93 MB。Min 的 67 MB 里，真正的「Min 代码」只占约 1.3 MB。
@@ -68,6 +70,17 @@ AMOLED 屏幕上黑色像素**不发光**，纯黑背景相比深灰能显著降
 > **实现上的一个坑**：`filter` 必须加在 `body` 上，`html` 的背景单独写死 `#000`。
 > 如果把 `filter` 加在 `html` 上，Chromium 的 canvas 底色**不参与过滤**，大片浅色底不会被反相
 > —— 我们踩过这个坑，纯黑占比只有 12%，加在 `body` 之后才到 97%。
+
+### ⬇ 下载
+
+接管 WebView 的 `setDownloadListener`，落盘交给系统 `DownloadManager` —— 不自己写 IO，也不多要一个权限。
+
+- 自动带上 **UA / Cookie / Referer**：论坛附件、网盘直链缺了这三个基本 403
+- 文件名按 `Content-Disposition` 推断，存进系统**下载**目录，通知栏可见
+- 权限按需申请：Android 6~9 弹一次存储授权；**Android 10+ 完全不需要**（文件由系统 DownloadProvider 落盘）
+- 标签页面板里有「↓ 下载内容」，直接跳系统下载管理器
+- 非 `http(s)` 链接（`tel:` `mailto:` `weixin:` 等）甩给系统，以前点了没反应
+- `intent://` 仍然放行给 WebView 自己解析 —— 用 `ACTION_VIEW` 硬传拉不起 App
 
 ### ⚡ 极简
 
@@ -130,12 +143,28 @@ app/
 
 1. **强制纯黑是反相方案**：浅色网站会变纯黑，但**本身就是深色的网站会被反转成浅色**。这是 `invert` 的固有特性。遇到排版异常的网站，点工具条上的 `●` 关掉即可。
 2. `filter` 会使 `body` 成为新的包含块，**个别网站的 `position:fixed` 悬浮元素可能错位**。
-3. 无广告拦截、无隐私模式、无书签、无下载管理 —— 这是刻意的取舍。
-4. 复用系统 WebView，因此**渲染能力取决于系统 WebView 版本**。
+3. 无广告拦截、无隐私模式、无书签 —— 这是刻意的取舍。
+4. 下载由系统 `DownloadManager` 执行，所以**不提供自定义保存路径、暂停/续传控制**；网页用 JS 生成的 `blob:` 下载它抓不到，这类按钮仍然点了没反应。下载失败的提示只给一行 toast，没有详情。
+5. 复用系统 WebView，因此**渲染能力取决于系统 WebView 版本**。
+
+## 更新日志
+
+### 2.2 — 2026-09-12
+
+- 新增下载：`setDownloadListener` + 系统 `DownloadManager`，带 UA / Cookie / Referer，落盘到公共下载目录
+- 新增存储权限按需申请（仅 Android 6~9），manifest 增加 `WRITE_EXTERNAL_STORAGE`（`maxSdkVersion=28`）
+- 新增纯黑 toast 提示（下载开始 / 失败 / 权限被拒），不用系统深灰 toast
+- 标签页面板新增「↓ 下载内容」入口
+- 非 `http(s)` scheme 链接改为交给系统处理
+- dex 14,496 → 17,956 字节，APK 16,857 → 20,953 字节
+
+### 2.1
+
+- 多标签页、纯黑 UI、强制网页纯黑、Bing 搜索
 
 ## 路线图
 
-- [ ] 下载管理（接管 `setDownloadListener`）
+- [x] 下载管理（接管 `setDownloadListener`）
 - [ ] 主页设置
 - [ ] 纯黑模式按站点白名单
 - [ ] 自适应图标（adaptive icon）
@@ -148,16 +177,17 @@ app/
 
 # Min Browser (English)
 
-> **A 16.5 KB Android browser. Zero dependencies. Pure black. Battery-friendly.**
+> **A 20.5 KB Android browser. Zero dependencies. Pure black. Battery-friendly.**
 
 A minimal browser built for AMOLED screens and people who like small software. It bundles no engine — it reuses the system WebView, which is why it barely qualifies as an app.
 
-- **16,857-byte APK**, 14,496-byte dex, **zero third-party dependencies**
+- **20,953-byte APK**, 17,956-byte dex, **zero third-party dependencies**
 - **Pure `#000000`** UI (not dark gray) — status bar, nav bar, toolbar, background
 - **Force-dark for web pages**: inverts light pages to true black (measured 97.35% pure black on a white test page)
 - **Multi-tab** with background tabs paused
+- **Downloads** via `setDownloadListener` + the system `DownloadManager`, with UA / Cookie / Referer headers so logged-in attachments work; storage permission is requested only on Android 6–9
 - Search via **Bing** (`cn.bing.com`)
-- `minSdk 21`, single `INTERNET` permission
+- `minSdk 21`, `INTERNET` plus `WRITE_EXTERNAL_STORAGE` (`maxSdkVersion=28`)
 - Measured **~1.3 MB app Dalvik heap**; total PSS ~67 MB, dominated by the shared system WebView
 
 No Gradle. Build with `aapt2`, `javac`, `d8`, `zipalign`, `apksigner`:
@@ -166,6 +196,6 @@ No Gradle. Build with `aapt2`, `javac`, `d8`, `zipalign`, `apksigner`:
 ANDROID_SDK_ROOT=/path/to/android-sdk bash app/build.sh
 ```
 
-Known limits: the force-dark uses CSS `invert`, so already-dark sites get flipped to light; `position:fixed` elements on some sites may shift. No adblock, no bookmarks, no downloads — by design.
+Known limits: the force-dark uses CSS `invert`, so already-dark sites get flipped to light; `position:fixed` elements on some sites may shift. Downloads are handed to the system `DownloadManager`, so there is no custom save path or pause control, and JS-generated `blob:` downloads are not supported. No adblock, no bookmarks, no private mode — by design.
 
 MIT licensed.

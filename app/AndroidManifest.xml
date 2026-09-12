@@ -1,10 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.blk.min"
-    android:versionCode="2"
-    android:versionName="2.1">
+    android:versionCode="3"
+    android:versionName="2.2">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 下载：Android 9 及以下由本应用写公共下载目录才需要；Android 10+ 走 DownloadManager 系统进程，无需此权限 -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
 
     <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="28" />
 
