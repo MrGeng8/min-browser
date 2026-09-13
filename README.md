@@ -165,9 +165,23 @@ app/
 ## 路线图
 
 - [x] 下载管理（接管 `setDownloadListener`）
+- [x] 鸿蒙版（ArkTS + ArkWeb，见 [`harmony/`](harmony/)）
 - [ ] 主页设置
 - [ ] 纯黑模式按站点白名单
 - [ ] 自适应图标（adaptive icon）
+
+## 鸿蒙版（HarmonyOS）
+
+仓库里还有一个用 **ArkTS + ArkWeb** 重写的鸿蒙版，产出可安装的 `.hap`（`bundleName: com.mrgeng.minbrowser`）。
+
+鸿蒙**不跑 APK**，所以它不是 APK 转换，而是按鸿蒙 API 重新实现的一套：`Web` 组件替代 WebView、`WebDownloadDelegate` 替代 DownloadManager，**「强制纯黑」用的是同一份注入脚本**。功能与 Android 版对齐：多标签、纯黑 UI、强制网页纯黑、Bing 搜索、下载。
+
+- 工程与构建说明：[`harmony/README.md`](harmony/README.md)
+- 两端对照、真机实测数据、踩坑记录：[`docs/v2.2-changes.md`](docs/v2.2-changes.md)
+
+## 界面说明
+
+搜索框不在屏幕顶端，而是浮在**屏幕上下黄金分割位置**（从底部往上 61.8%）并左右居中，描边 `#7A7A7A` 与纯黑背景形成反差；右上角两个按钮分别是「强制纯黑开关」和「前往」，左上角竖向三点为标签页面板（长按直接新建标签页）。
 
 ## License
 

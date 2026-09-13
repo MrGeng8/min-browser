@@ -1,0 +1,13 @@
+#!/bin/bash
+# Hvigor 启动脚本。
+# 首次构建请先用 DevEco Studio 打开工程并执行一次 Sync（会自动生成
+# hvigor/hvigor-wrapper.js），或手动安装：
+#   npm install --prefix hvigor @ohos/hvigor @ohos/hvigor-ohos-plugin
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+if [ ! -f "$SCRIPT_DIR/hvigor/hvigor-wrapper.js" ]; then
+  echo "缺少 hvigor/hvigor-wrapper.js"
+  echo "请先用 DevEco Studio 打开本工程并执行一次 Sync，或运行："
+  echo "  npm install --prefix $SCRIPT_DIR/hvigor @ohos/hvigor @ohos/hvigor-ohos-plugin"
+  exit 1
+fi
+exec node "$SCRIPT_DIR/hvigor/hvigor-wrapper.js" "$@"
