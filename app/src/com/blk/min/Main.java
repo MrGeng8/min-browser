@@ -7,11 +7,14 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
+import android.util.DisplayMetrics;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.text.InputType;
+import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -47,6 +50,8 @@ public class Main extends Activity {
     static final int BLACK = 0xFF000000;
     static final int FG    = 0xFFEDEDED;
     static final int DIM   = 0xFF5A5A5A;
+    /** 浮层搜索框的描边色，和纯黑背景形成反差 */
+    static final int BORDER = 0xFF7A7A7A;
 
     /** 国内可直连的 Bing；原来的 duckduckgo 在国内不可达 */
     static final String SEARCH = "https://cn.bing.com/search?q=";
@@ -98,7 +103,7 @@ public class Main extends Activity {
     FrameLayout stage;
     EditText url;
     TextView darkBtn;
-    TextView tabBtn;
+    View tabBtn;
     boolean forceDark = true;
     int cur = -1;
     float d;
@@ -120,44 +125,84 @@ public class Main extends Activity {
         d = getResources().getDisplayMetrics().density;
         pad = (int) (5 * d);
 
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
+        // ---------- 根容器：FrameLayout，方便把搜索框做成浮层 ----------
+        FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(BLACK);
 
-        // ---------- 工具条: [标签数] [地址] [●] [→] ----------
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setBackgroundColor(BLACK);
+
+        // ---------- 顶部工具条: [⋮] [●] [→]（地址框挪到浮层了）----------
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setBackgroundColor(BLACK);
         bar.setPadding(pad, pad, pad, pad);
 
-        tabBtn = mkBtn("1");
+        // 竖向三点：点开标签页面板，长按直接新建标签页。
+        // 用三个圆点画出来，不依赖字体里的 '⋮' 字形。
+        tabBtn = mkDots();
         bar.addView(tabBtn);
 
-        url = new EditText(this);
-        url.setSingleLine(true);
-        url.setHint("搜索或输入网址");
-        url.setHintTextColor(DIM);
-        url.setTextColor(FG);
-        url.setTextSize(13);
-        url.setBackground(null);
-        url.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
-        url.setImeOptions(EditorInfo.IME_ACTION_GO);
-        url.setSelectAllOnFocus(true);
-        bar.addView(url, new LinearLayout.LayoutParams(0,
-                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        // 占位撑开，把 ● 和 → 顶到右边
+        View spacer = new View(this);
+        bar.addView(spacer, new LinearLayout.LayoutParams(0, 1, 1f));
 
         darkBtn = mkBtn("●");
         bar.addView(darkBtn);
         TextView goBtn = mkBtn("→");
         bar.addView(goBtn);
 
-        root.addView(bar, new LinearLayout.LayoutParams(
+        col.addView(bar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         stage = new FrameLayout(this);
         stage.setBackgroundColor(BLACK);
-        root.addView(stage, new LinearLayout.LayoutParams(
+        col.addView(stage, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        root.addView(col, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // ---------- 浮层搜索框 ----------
+        // 位置：从屏幕底部往上 61.8%（= 顶部往下 38.2%），左右居中；
+        // 边框用中灰 #7A7A7A，与纯黑背景形成反差。
+        url = new EditText(this);
+        url.setSingleLine(true);
+        url.setHint("搜索或输入网址");
+        url.setHintTextColor(DIM);
+        url.setTextColor(FG);
+        url.setTextSize(14);
+        url.setBackground(null);
+        url.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
+        url.setImeOptions(EditorInfo.IME_ACTION_GO);
+        url.setSelectAllOnFocus(true);
+
+        LinearLayout searchBox = new LinearLayout(this);
+        searchBox.setOrientation(LinearLayout.HORIZONTAL);
+        GradientDrawable boxBg = new GradientDrawable();
+        boxBg.setShape(GradientDrawable.RECTANGLE);
+        boxBg.setColor(BLACK);
+        boxBg.setCornerRadius(25 * d);
+        boxBg.setStroke((int) Math.max(1, d), BORDER);
+        searchBox.setBackground(boxBg);
+        searchBox.setPadding((int) (13 * d), 0, (int) (13 * d), 0);
+        searchBox.addView(url, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+
+        // 整屏高度（含系统栏），减去状态栏高度，换算到内容区的坐标
+        DisplayMetrics real = new DisplayMetrics();
+        getWindowManager().getDefaultDisplay().getRealMetrics(real);
+        int statusBar = 0;
+        int sbId = getResources().getIdentifier("status_bar_height", "dimen", "android");
+        if (sbId > 0) statusBar = getResources().getDimensionPixelSize(sbId);
+        int topMargin = (int) (real.heightPixels * 0.382f) - statusBar;
+
+        FrameLayout.LayoutParams slp = new FrameLayout.LayoutParams(
+                (int) (real.widthPixels * 0.86f), (int) (50 * d));
+        slp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+        slp.topMargin = Math.max(0, topMargin);
+        root.addView(searchBox, slp);
 
         setContentView(root);
 
@@ -320,7 +365,28 @@ public class Main extends Activity {
         selectTab(Math.min(i, tabs.size() - 1));
     }
 
-    void syncTabBtn() { tabBtn.setText(String.valueOf(tabs.size())); }
+    /** 顶部那个竖向三点按钮：可访问性描述里带上标签数，界面上的数字在标签面板里 */
+    void syncTabBtn() { tabBtn.setContentDescription("标签页 " + tabs.size()); }
+
+    /** 竖向三点按钮：竖排三个小圆点，避免依赖字体里的 '⋮' 字形 */
+    View mkDots() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int dot = (int) (3.5 * d);
+        for (int i = 0; i < 3; i++) {
+            View v = new View(this);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dot, dot);
+            if (i > 0) lp.topMargin = (int) (3 * d);
+            v.setLayoutParams(lp);
+            GradientDrawable c = new GradientDrawable();
+            c.setShape(GradientDrawable.OVAL);
+            c.setColor(FG);
+            v.setBackground(c);
+            box.addView(v);
+        }
+        box.setPadding((int) (14 * d), (int) (12 * d), (int) (14 * d), (int) (12 * d));
+        return box;
+    }
 
     void syncDarkBtn() { darkBtn.setTextColor(forceDark ? 0xFFFFFFFF : DIM); }
 
@@ -497,6 +563,9 @@ public class Main extends Activity {
 
     void paint(final WebView v) {
         if (!forceDark) return;
+        // 空白页不要注入反相：它的底本来就是纯黑，invert 一下会翻成整片白
+        String u = v.getUrl();
+        if (u == null || u.startsWith("about:") || u.startsWith("data:")) return;
         v.evaluateJavascript(JS_DARK, new android.webkit.ValueCallback<String>() {
             @Override public void onReceiveValue(String r) {
                 android.util.Log.i("Min", "darkInject=" + r + " url=" + v.getUrl());
