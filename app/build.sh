@@ -47,6 +47,13 @@ done
 KS="$APP/min.keystore"
 rm -rf "$OUT"; mkdir -p "$OUT/classes" "$OUT/dex"
 
+# AGP/Gradle 工程把包名移到了 namespace，这里为 aapt2 临时补回 package 属性
+MANIFEST="$APP/AndroidManifest.xml"
+if ! grep -q 'package=' "$MANIFEST"; then
+  MANIFEST="$OUT/AndroidManifest.build.xml"
+  sed 's/<manifest /<manifest package="com.blk.min" /' "$APP/AndroidManifest.xml" > "$MANIFEST"
+fi
+
 echo "SDK        : $SDK"
 echo "build-tools: $BT"
 echo
@@ -63,7 +70,7 @@ echo "==> 3/7 aapt2 link"
 "$BT/aapt2" link \
   -o "$OUT/base.apk" \
   -I "$AJAR" \
-  --manifest "$APP/AndroidManifest.xml" \
+  --manifest "$MANIFEST" \
   --min-sdk-version 21 \
   --target-sdk-version 28 \
   "$OUT/res.zip"

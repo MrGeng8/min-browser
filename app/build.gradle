@@ -1,0 +1,50 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.blk.min'
+    compileSdk 37
+
+    defaultConfig {
+        applicationId 'com.blk.min'
+        minSdk 21
+        targetSdk 28
+        versionCode 3
+        versionName '2.2'
+    }
+
+    // 沿用原有目录结构，不迁移成标准 src/main 布局
+    sourceSets {
+        main {
+            manifest.srcFile 'AndroidManifest.xml'
+            java.srcDirs = ['src']
+            res.srcDirs = ['res']
+        }
+    }
+
+    // 与手动构建 build.sh 使用同一密钥，debug 包可覆盖安装正式包
+    signingConfigs {
+        create('min') {
+            storeFile file('min.keystore')
+            storePassword 'android'
+            keyAlias 'minkey'
+            keyPassword 'android'
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.min
+        }
+        release {
+            signingConfig signingConfigs.min
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+}

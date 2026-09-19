@@ -6,6 +6,7 @@ import android.app.DownloadManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
@@ -16,6 +17,7 @@ import android.os.Environment;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.WindowManager;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -52,6 +54,11 @@ public class Main extends Activity {
     static final int DIM   = 0xFF5A5A5A;
     /** 浮层搜索框的描边色，和纯黑背景形成反差 */
     static final int BORDER = 0xFF7A7A7A;
+    /** 浅色主题：白底黑字，描边 / 次要文字都比底色深一档才看得出来 */
+    static final int WHITE = 0xFFFFFFFF;
+    static final int FG_LIGHT = 0xFF000000;
+    static final int DIM_LIGHT = 0xFF8A8A8A;
+    static final int LINE_LIGHT = 0xFFBFBFBF;
 
     /** 国内可直连的 Bing；原来的 duckduckgo 在国内不可达 */
     static final String SEARCH = "https://cn.bing.com/search?q=";
@@ -69,20 +76,34 @@ public class Main extends Activity {
         "javascript:", "intent:"
     };
 
-    static final String BLANK =
-        "<html style=\"background:#000\"><head>" +
-        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
-        "<style>html,body{background:#000;margin:0;height:100%}</style></head>" +
-        "<body></body></html>";
-
     /**
      * 强制纯黑。
+     * 先测页面自身底色亮度：本来就是深色的页面不再反相（反了会变白底黑字，跟主题颠倒）。
+     * 但 Bing 这类站点加载中背景色会"黑→白"闪烁，单次采样会误判，
+     * 所以用 __blkDark 连续计数：连续两次深色才放弃，任何一次浅色立即注入。
      * filter 只能加在 body 上，html 背景单独写死 #000 —— 若加在 html 上，
      * Chromium 的 canvas 底色不参与过滤，大片浅色底不会被反相。
      */
     static final String JS_DARK =
         "(function(){" +
-        "var id='__blk',s=document.getElementById(id);" +
+        "var id='__blk';" +
+        "var bg='';" +
+        // 注意：反相样式会把 html 背景改成 #000，读 html 会读到自己造成的黑色，
+        // 形成注入/撤销来回打摆 —— 所以优先读 body 背景做原生底色判定
+        "try{bg=getComputedStyle(document.body).backgroundColor;}catch(e){}" +
+        "if(!bg||bg.indexOf('rgba(0, 0, 0, 0)')===0||bg==='transparent'){" +
+        "try{bg=getComputedStyle(document.documentElement).backgroundColor;}catch(e){}}" +
+        "var m=bg.match(/[\\d.]+/g),lum=255;" +
+        "if(m&&m.length>=3){" +
+        "var a=m.length>3?parseFloat(m[3]):1;" +
+        "if(a>0.5)lum=0.299*m[0]+0.587*m[1]+0.114*m[2];}" +
+        "if(lum<110){" +
+        "window.__blkDark=(window.__blkDark||0)+1;" +
+        "if(window.__blkDark>=2){var s0=document.getElementById(id);if(s0)s0.remove();" +
+        "return 'skip-native-dark(x'+window.__blkDark+',lum='+lum+')';}" +
+        "return 'maybe-dark(x'+window.__blkDark+',lum='+lum+')';}" +
+        "window.__blkDark=0;" +
+        "var s=document.getElementById(id);" +
         "if(!s){s=document.createElement('style');s.id=id;" +
         "(document.head||document.documentElement).appendChild(s);}" +
         "s.textContent=" +
@@ -90,7 +111,11 @@ public class Main extends Activity {
         "'body{filter:invert(1) hue-rotate(180deg)!important;}'+" +
         "'img,video,picture,canvas,svg,iframe,embed,object,input[type=image]" +
         "{filter:invert(1) hue-rotate(180deg)!important;}';" +
-        "return 'ok';})()";
+        "return 'ok(lum='+lum+')';})()";
+
+    /** 关闭强制纯黑：把注入的 style 摘掉，不用整页 reload（保留滚动位置与表单状态） */
+    static final String JS_DARK_OFF =
+        "(function(){var s=document.getElementById('__blk');if(s){s.remove();}return 'off';})()";
 
     static class Tab {
         WebView wv;
@@ -100,11 +125,21 @@ public class Main extends Activity {
     }
 
     final ArrayList<Tab> tabs = new ArrayList<Tab>();
+    /** 顶部三点按钮的三个圆点，切主题时要重刷颜色 */
+    final ArrayList<View> dots = new ArrayList<View>();
     FrameLayout stage;
     EditText url;
     TextView darkBtn;
     View tabBtn;
+    TextView goBtn;
+    FrameLayout root;
+    LinearLayout col;
+    LinearLayout bar;
+    LinearLayout searchBox;
+    GradientDrawable boxBg;
     boolean forceDark = true;
+    /** 浮层搜索框只在空白起始页常驻；浏览网页时收起，点「→」可唤出 */
+    boolean urlBoxVisible = true;
     int cur = -1;
     float d;
     int pad;
@@ -126,17 +161,17 @@ public class Main extends Activity {
         pad = (int) (5 * d);
 
         // ---------- 根容器：FrameLayout，方便把搜索框做成浮层 ----------
-        FrameLayout root = new FrameLayout(this);
-        root.setBackgroundColor(BLACK);
+        root = new FrameLayout(this);
+        root.setBackgroundColor(bg());
 
-        LinearLayout col = new LinearLayout(this);
+        col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
-        col.setBackgroundColor(BLACK);
+        col.setBackgroundColor(bg());
 
         // ---------- 顶部工具条: [⋮] [●] [→]（地址框挪到浮层了）----------
-        LinearLayout bar = new LinearLayout(this);
+        bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
-        bar.setBackgroundColor(BLACK);
+        bar.setBackgroundColor(bg());
         bar.setPadding(pad, pad, pad, pad);
 
         // 竖向三点：点开标签页面板，长按直接新建标签页。
@@ -150,14 +185,14 @@ public class Main extends Activity {
 
         darkBtn = mkBtn("●");
         bar.addView(darkBtn);
-        TextView goBtn = mkBtn("→");
+        goBtn = mkBtn("→");
         bar.addView(goBtn);
 
         col.addView(bar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         stage = new FrameLayout(this);
-        stage.setBackgroundColor(BLACK);
+        stage.setBackgroundColor(bg());
         col.addView(stage, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
@@ -170,21 +205,21 @@ public class Main extends Activity {
         url = new EditText(this);
         url.setSingleLine(true);
         url.setHint("搜索或输入网址");
-        url.setHintTextColor(DIM);
-        url.setTextColor(FG);
+        url.setHintTextColor(sub());
+        url.setTextColor(fg());
         url.setTextSize(14);
         url.setBackground(null);
         url.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
         url.setImeOptions(EditorInfo.IME_ACTION_GO);
         url.setSelectAllOnFocus(true);
 
-        LinearLayout searchBox = new LinearLayout(this);
+        searchBox = new LinearLayout(this);
         searchBox.setOrientation(LinearLayout.HORIZONTAL);
-        GradientDrawable boxBg = new GradientDrawable();
+        boxBg = new GradientDrawable();
         boxBg.setShape(GradientDrawable.RECTANGLE);
-        boxBg.setColor(BLACK);
+        boxBg.setColor(bg());
         boxBg.setCornerRadius(25 * d);
-        boxBg.setStroke((int) Math.max(1, d), BORDER);
+        boxBg.setStroke((int) Math.max(1, d), line());
         searchBox.setBackground(boxBg);
         searchBox.setPadding((int) (13 * d), 0, (int) (13 * d), 0);
         searchBox.addView(url, new LinearLayout.LayoutParams(0,
@@ -208,7 +243,17 @@ public class Main extends Activity {
 
         // ---------- 交互 ----------
         goBtn.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { go(url.getText().toString()); }
+            @Override public void onClick(View v) {
+                // 收起状态下的「→」= 唤出地址框并预填当前网址；显示状态下才是提交
+                if (!urlBoxVisible) {
+                    Tab t = (cur >= 0 && cur < tabs.size()) ? tabs.get(cur) : null;
+                    url.setText(t == null || t.url == null ? "" : t.url);
+                    setUrlBoxVisible(true);
+                    url.requestFocus();
+                    return;
+                }
+                go(url.getText().toString());
+            }
         });
         url.setOnEditorActionListener(new TextView.OnEditorActionListener() {
             @Override public boolean onEditorAction(TextView v, int a, KeyEvent e) {
@@ -217,11 +262,7 @@ public class Main extends Activity {
             }
         });
         darkBtn.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                forceDark = !forceDark;
-                syncDarkBtn();
-                if (cur >= 0) tabs.get(cur).wv.reload();
-            }
+            @Override public void onClick(View v) { toggleTheme(); }
         });
         tabBtn.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { showTabs(); }
@@ -251,12 +292,102 @@ public class Main extends Activity {
         super.onDestroy();
     }
 
+    // ================= 主题 =================
+
+    /**
+     * 一个 forceDark 同时决定两件事：
+     * 开 = 纯黑主题（App 界面全黑 + 网页反相成黑），关 = 浅色主题（白底黑字 + 网页保持原色）。
+     * Android 没有 ArkUI 那种 @State 自动重算，所以切主题后要 applyTheme() 手动刷一遍控件。
+     */
+    int bg() { return forceDark ? BLACK : WHITE; }
+    int fg() { return forceDark ? FG : FG_LIGHT; }
+    /** 次要文字：提示、占位符 */
+    int sub() { return forceDark ? DIM : DIM_LIGHT; }
+    /** 搜索框描边：比底色深一档 */
+    int line() { return forceDark ? BORDER : LINE_LIGHT; }
+
+    /**
+     * 空白新标签页的内联 HTML。它的底必须跟着主题走 —— 空白页不注入反相，
+     * 底色就是它看到的全部，写死纯黑的话切到浅色主题时这一页会明显"没反应"。
+     */
+    String blankHtml() {
+        String bg = forceDark ? "#000" : "#fff";
+        return "<html style=\"background:" + bg + "\"><head>" +
+            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
+            "<style>html,body{background:" + bg + ";margin:0;height:100%}</style></head>" +
+            "<body></body></html>";
+    }
+
+    /** 切换主题：重刷 App 界面配色 + 系统栏，网页层注入 / 摘除反相脚本 */
+    void toggleTheme() {
+        forceDark = !forceDark;
+        applyTheme();
+        repaintAllTabs();
+    }
+
+    /** 把主题配色重新应用到每个控件上 */
+    void applyTheme() {
+        root.setBackgroundColor(bg());
+        col.setBackgroundColor(bg());
+        bar.setBackgroundColor(bg());
+        stage.setBackgroundColor(bg());
+        goBtn.setTextColor(fg());
+        syncDarkBtn();
+        url.setTextColor(fg());
+        url.setHintTextColor(sub());
+        boxBg.setColor(bg());
+        boxBg.setStroke((int) Math.max(1, d), line());
+        searchBox.setBackground(boxBg);
+        for (int i = 0; i < dots.size(); i++) {
+            GradientDrawable c = new GradientDrawable();
+            c.setShape(GradientDrawable.OVAL);
+            c.setColor(fg());
+            dots.get(i).setBackground(c);
+        }
+        Window w = getWindow();
+        w.setBackgroundDrawable(new ColorDrawable(bg()));
+        w.setStatusBarColor(bg());
+        w.setNavigationBarColor(bg());
+        // 浅色主题下状态栏 / 导航栏是白底，系统图标必须切成深色才看得见（该 flag 是 API 23+）
+        if (Build.VERSION.SDK_INT >= 23) {
+            View decor = w.getDecorView();
+            int flags = decor.getSystemUiVisibility();
+            if (forceDark) {
+                flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            } else {
+                flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            }
+            decor.setSystemUiVisibility(flags);
+        }
+    }
+
+    /** 主题切换后重刷所有标签页：纯黑注入反相，浅色摘除；空白页重灌主题背景 */
+    void repaintAllTabs() {
+        for (int i = 0; i < tabs.size(); i++) {
+            Tab t = tabs.get(i);
+            if (t.url == null || t.url.length() == 0) {
+                t.wv.loadDataWithBaseURL(null, blankHtml(), "text/html", "utf-8", null);
+                continue;
+            }
+            // 注入 / 摘除同一份脚本，不整页 reload —— 保留滚动位置和表单状态
+            t.wv.evaluateJavascript(forceDark ? JS_DARK : JS_DARK_OFF, null);
+        }
+    }
+
     // ================= 标签页 =================
 
     WebView makeWV() {
-        WebView v = new WebView(this);
-        v.setBackgroundColor(BLACK);
+        // 让 WebView 始终认为处于浅色模式：否则系统夜间模式（或跟随系统的站点）会直接输出深色页，
+        // 与反相脚本叠加后就变成「App 黑、网页白」的颠倒效果
+        Configuration wc = new Configuration(getResources().getConfiguration());
+        wc.uiMode = (wc.uiMode & ~Configuration.UI_MODE_NIGHT_MASK)
+                | Configuration.UI_MODE_NIGHT_NO;
+        WebView v = new WebView(createConfigurationContext(wc));
+        v.setBackgroundColor(bg());
         WebSettings s = v.getSettings();
+        if (Build.VERSION.SDK_INT >= 33) {
+            s.setAlgorithmicDarkeningAllowed(false);   // 关闭系统自动加深，颜色策略完全交给本应用
+        }
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         s.setUseWideViewPort(true);
@@ -287,6 +418,8 @@ public class Main extends Activity {
                     t.url = u;
                     if (cur >= 0 && tabs.get(cur) == t) url.setText(u);
                 }
+                // 页面加载完重新判定一次：导航到网页后地址框自动收起
+                if (t != null && cur >= 0 && tabs.get(cur) == t) syncUrlBox();
                 paint(w);
             }
         });
@@ -331,7 +464,7 @@ public class Main extends Activity {
             url.setText(u);
             go(u);
         } else {
-            v.loadDataWithBaseURL(null, BLANK, "text/html", "utf-8", null);
+            v.loadDataWithBaseURL(null, blankHtml(), "text/html", "utf-8", null);
         }
     }
 
@@ -350,6 +483,30 @@ public class Main extends Activity {
         cur = i;
         url.setText(tabs.get(i).url == null ? "" : tabs.get(i).url);
         syncTabBtn();
+        syncUrlBox();
+    }
+
+    /** 当前活动标签页是否为空白起始页（空白页的 url 保持空串）*/
+    boolean activeIsBlank() {
+        if (cur < 0 || cur >= tabs.size()) return true;
+        String u = tabs.get(cur).url;
+        return u == null || u.length() == 0;
+    }
+
+    /** 浮层搜索框跟随活动标签页：空白起始页显示，浏览网页收起 */
+    void syncUrlBox() { setUrlBoxVisible(activeIsBlank()); }
+
+    void setUrlBoxVisible(boolean on) {
+        if (urlBoxVisible == on) return;
+        urlBoxVisible = on;
+        searchBox.setVisibility(on ? View.VISIBLE : View.GONE);
+        if (!on) {
+            // 收起时同时收键盘，否则输入法会悬在网页上无处可去
+            url.clearFocus();
+            InputMethodManager im =
+                    (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (im != null) im.hideSoftInputFromWindow(url.getWindowToken(), 0);
+        }
     }
 
     void closeTab(int i) {
@@ -380,21 +537,26 @@ public class Main extends Activity {
             v.setLayoutParams(lp);
             GradientDrawable c = new GradientDrawable();
             c.setShape(GradientDrawable.OVAL);
-            c.setColor(FG);
+            c.setColor(fg());
             v.setBackground(c);
             box.addView(v);
+            dots.add(v);
         }
         box.setPadding((int) (14 * d), (int) (12 * d), (int) (14 * d), (int) (12 * d));
         return box;
     }
 
-    void syncDarkBtn() { darkBtn.setTextColor(forceDark ? 0xFFFFFFFF : DIM); }
+    /** ● / ○ 同时表示当前主题：实心 = 纯黑，空心 = 浅色 */
+    void syncDarkBtn() {
+        darkBtn.setText(forceDark ? "●" : "○");
+        darkBtn.setTextColor(fg());
+    }
 
     TextView mkBtn(String t) {
         TextView tv = new TextView(this);
         tv.setText(t);
         tv.setTextSize(15);
-        tv.setTextColor(FG);
+        tv.setTextColor(fg());
         int p = (int) (8 * d);
         tv.setPadding(p, p, p, p);
         return tv;
@@ -405,10 +567,10 @@ public class Main extends Activity {
         final Dialog dlg = new Dialog(this);
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setBackgroundColor(BLACK);
+        box.setBackgroundColor(bg());
         box.setPadding(pad * 2, pad * 2, pad * 2, pad * 2);
 
-        TextView head = row("标签页  " + tabs.size(), DIM, 12);
+        TextView head = row("标签页  " + tabs.size(), sub(), 12);
         head.setPadding(pad * 2, pad, pad * 2, pad * 2);
         box.addView(head);
 
@@ -419,7 +581,7 @@ public class Main extends Activity {
             if (title.length() > 26) title = title.substring(0, 26) + "…";
 
             TextView tv = row((i == cur ? "●  " : "○  ") + title,
-                    i == cur ? 0xFFFFFFFF : 0xFF9A9A9A, 15);
+                    i == cur ? fg() : sub(), 15);
             tv.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View v) { selectTab(idx); dlg.dismiss(); }
             });
@@ -429,13 +591,13 @@ public class Main extends Activity {
             box.addView(tv);
         }
 
-        TextView add = row("＋  新建标签页", FG, 15);
+        TextView add = row("＋  新建标签页", fg(), 15);
         add.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { newTab(null); dlg.dismiss(); }
         });
         box.addView(add);
 
-        TextView dl = row("↓  下载内容", FG, 15);
+        TextView dl = row("↓  下载内容", fg(), 15);
         dl.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 dlg.dismiss();
@@ -448,13 +610,13 @@ public class Main extends Activity {
         });
         box.addView(dl);
 
-        TextView close = row("✕  关闭当前标签页", 0xFF9A9A9A, 15);
+        TextView close = row("✕  关闭当前标签页", sub(), 15);
         close.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { closeTab(cur); dlg.dismiss(); }
         });
         box.addView(close);
 
-        TextView hint = row("长按列表项可直接关闭该标签页", DIM, 11);
+        TextView hint = row("长按列表项可直接关闭该标签页", sub(), 11);
         hint.setPadding(pad * 2, pad * 2, pad * 2, pad);
         box.addView(hint);
 
@@ -462,9 +624,14 @@ public class Main extends Activity {
         dlg.show();
         Window dw = dlg.getWindow();
         if (dw != null) {
-            dw.setBackgroundDrawable(new ColorDrawable(BLACK));
+            dw.setBackgroundDrawable(new ColorDrawable(bg()));
             dw.setLayout((int) (getResources().getDisplayMetrics().widthPixels * 0.88),
                     ViewGroup.LayoutParams.WRAP_CONTENT);
+            // 贴到左上角三个点按钮的正下方，而不是屏幕居中
+            WindowManager.LayoutParams lp = dw.getAttributes();
+            lp.gravity = Gravity.TOP | Gravity.START;
+            lp.y = (int) (52 * d);
+            dw.setAttributes(lp);
         }
     }
 
@@ -536,9 +703,9 @@ public class Main extends Activity {
         Toast t = new Toast(this);
         TextView tv = new TextView(this);
         tv.setText(s);
-        tv.setTextColor(FG);
+        tv.setTextColor(fg());
         tv.setTextSize(13);
-        tv.setBackgroundColor(BLACK);
+        tv.setBackgroundColor(bg());
         tv.setPadding(pad * 3, pad * 2, pad * 3, pad * 2);
         t.setView(tv);
         t.setDuration(Toast.LENGTH_SHORT);
@@ -571,6 +738,18 @@ public class Main extends Activity {
                 android.util.Log.i("Min", "darkInject=" + r + " url=" + v.getUrl());
             }
         });
+        final Runnable later = new Runnable() {
+            @Override public void run() {
+                if (!forceDark) return;
+                String u2 = v.getUrl();
+                if (u2 == null || u2.startsWith("about:") || u2.startsWith("data:")) return;
+                v.evaluateJavascript(JS_DARK, null);
+            }
+        };
+        // Bing 这类站点加载中背景色会闪烁，多采样几次让"连续深色才跳过"的
+        // 判定收敛到稳定状态
+        v.postDelayed(later, 700);
+        v.postDelayed(later, 2000);
     }
 
     void go(String input) {
@@ -587,6 +766,7 @@ public class Main extends Activity {
         t.wv.loadUrl(u);
         url.setText(u);
         url.clearFocus();
+        syncUrlBox();
 
         InputMethodManager im =
                 (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
@@ -595,9 +775,16 @@ public class Main extends Activity {
 
     @Override
     public boolean onKeyDown(int key, KeyEvent e) {
-        if (key == KeyEvent.KEYCODE_BACK && cur >= 0 && tabs.get(cur).wv.canGoBack()) {
-            tabs.get(cur).wv.goBack();
-            return true;
+        if (key == KeyEvent.KEYCODE_BACK) {
+            // 浏览网页时手动唤出的地址框先收起，再退网页
+            if (urlBoxVisible && !activeIsBlank()) {
+                setUrlBoxVisible(false);
+                return true;
+            }
+            if (cur >= 0 && tabs.get(cur).wv.canGoBack()) {
+                tabs.get(cur).wv.goBack();
+                return true;
+            }
         }
         return super.onKeyDown(key, e);
     }

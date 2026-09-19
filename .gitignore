@@ -26,3 +26,15 @@ harmony/local.properties
 harmony/oh-package-lock.json5
 *.hap
 *.hsp
+
+# Android Gradle 本地配置
+local.properties
+
+# 构建系统临时产物（根目录）
+build/
+.hvigor/
+
+# 发布产物例外：dist 下的最终包要上传
+!dist/*.apk
+!dist/*.hap
+gradle/gradle-daemon-jvm.properties

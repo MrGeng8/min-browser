@@ -8,10 +8,15 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const TAG: string = 'Min';
 
-/** 纯黑，和 Android 版一致：是真黑 #000000，不是深灰 */
+/** 纯黑主题（默认），和 Android 版一致：是真黑 #000000，不是深灰 */
 const BLACK: string = '#FF000000';
 const FG: string = '#FFEDEDED';
 const DIM: string = '#FF5A5A5A';
+/** 浅色主题：白底黑字，描边 / 次要文字都比底色深一档才看得出来 */
+const WHITE: string = '#FFFFFFFF';
+const FG_LIGHT: string = '#FF000000';
+const DIM_LIGHT: string = '#FF8A8A8A';
+const LINE_LIGHT: string = '#FFBFBFBF';
 
 /** 国内可直连的 Bing */
 const SEARCH: string = 'https://cn.bing.com/search?q=';
@@ -20,14 +25,10 @@ const SEARCH: string = 'https://cn.bing.com/search?q=';
  * 空白新标签页。
  * 不能用 about:blank —— 它渲染出来是白底，跟纯黑主题冲突（data: URL 也不行，
  * ArkWeb 下不生效且会把这串 URL 显示到地址栏）。所以建 Web 时先给 about:blank，
- * 控制器一挂上就用 loadData 灌一段自带纯黑背景的内联 HTML。
+ * 控制器一挂上就用 loadData 灌一段自带背景的内联 HTML —— 背景跟着主题走，
+ * 见 blankHtml()：纯黑主题下灌 #000，浅色主题下灌 #fff。
  */
 const BLANK: string = 'about:blank';
-
-const BLANK_HTML: string =
-  '<html style="background:#000">' +
-  '<head><meta name="viewport" content="width=device-width,initial-scale=1"></head>' +
-  '<body style="background:#000;margin:0;height:100%"></body></html>';
 
 /**
  * 强制纯黑。
@@ -120,11 +121,16 @@ struct Index {
   @State toastText: string = '';
   /** 搜索框上边框相对内容区顶部的偏移（vp），由 placeSearchBox 按整屏高度算出 */
   @State searchTop: number = 320;
+  /** 浮层搜索框只在空白起始页常驻；浏览网页时收起，点「→」可唤出 */
+  @State urlBoxVisible: boolean = true;
 
   aboutToAppear(): void {
     const start: string | undefined = AppStorage.get<string>('startUrl');
     this.newTab(start === undefined ? '' : start);
     this.placeSearchBox();
+    // EntryAbility 里那次 setWindowBackgroundColor 会报 "window state is abnormal" 不生效，
+    // 这里窗口就绪了，按当前主题再打一遍系统栏 / 窗口底色
+    this.syncSystemBars();
   }
 
   /** 回到前台时重算一次：屏幕尺寸可能变了（旋转 / 折叠屏展开） */
@@ -172,6 +178,10 @@ struct Index {
       this.showPanel = false;
       return true;
     }
+    if (this.urlBoxVisible && !this.activeIsBlank()) {
+      this.urlBoxVisible = false;
+      return true;
+    }
     const ctrl: webview.WebviewController | undefined = this.ctrls.get(this.active);
     if (ctrl !== undefined) {
       try {
@@ -188,13 +198,13 @@ struct Index {
 
   build() {
     Stack({ alignContent: Alignment.Bottom }) {
-      // 纯黑背景层：扩展到状态栏 / 导航栏底下。
+      // 底色层：扩展到状态栏 / 导航栏底下。
       // 页面内容默认只排布在安全区内，安全区之外（底部导航栏那条）露出的
-      // 是窗口默认底色 —— 不铺这一层就会看到一条白边。
+      // 是窗口默认底色 —— 不铺这一层就会看到一条白边（浅色主题下是黑边）。
       Column()
         .width('100%')
         .height('100%')
-        .backgroundColor(BLACK)
+        .backgroundColor(this.bg())
         .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
 
       Column() {
@@ -203,9 +213,9 @@ struct Index {
           // 竖向三点：点开标签页面板，长按直接新建标签页。
           // 用三个圆点堆出来而不是文字 '⋮'，避免字体里没有这个字形。
           Column({ space: 3 }) {
-            Circle().width(3.5).height(3.5).fill(FG)
-            Circle().width(3.5).height(3.5).fill(FG)
-            Circle().width(3.5).height(3.5).fill(FG)
+            Circle().width(3.5).height(3.5).fill(this.fg())
+            Circle().width(3.5).height(3.5).fill(this.fg())
+            Circle().width(3.5).height(3.5).fill(this.fg())
           }
           .padding({ left: 14, right: 14, top: 10, bottom: 10 })
           .onClick(() => {
@@ -218,9 +228,10 @@ struct Index {
 
           Blank()
 
-          Text('●')
+          // ● / ○ 同时表示当前主题：实心 = 纯黑，空心 = 浅色
+          Text(this.darkOn ? '●' : '○')
             .fontSize(15)
-            .fontColor(this.darkOn ? '#FFFFFFFF' : DIM)
+            .fontColor(this.fg())
             .padding(10)
             .onClick(() => {
               this.toggleDark();
@@ -228,14 +239,20 @@ struct Index {
 
           Text('→')
             .fontSize(15)
-            .fontColor(FG)
+            .fontColor(this.fg())
             .padding(10)
             .onClick(() => {
+              if (!this.urlBoxVisible) {
+                const live: string | undefined = this.curUrls.get(this.active);
+                this.urlText = (live === undefined || live === BLANK) ? '' : live;
+                this.urlBoxVisible = true;
+                return;
+              }
               this.go(this.urlText);
             })
         }
         .width('100%')
-        .backgroundColor(BLACK)
+        .backgroundColor(this.bg())
 
         // ---------- 网页层：所有标签页都活着，只切可见性 ----------
         Stack() {
@@ -254,7 +271,7 @@ struct Index {
               .overScrollMode(OverScrollMode.NEVER)
               .darkMode(WebDarkMode.Off)
               .forceDarkAccess(false)
-              .backgroundColor(BLACK)
+              .backgroundColor(this.bg())
               .visibility(t.id === this.active ? Visibility.Visible : Visibility.None)
               .onControllerAttached(() => {
                 this.onAttached(t.id);
@@ -263,6 +280,9 @@ struct Index {
                 const u: string = event.url;
                 // about:blank / data: 是空白页的内部地址，不能当真实网址显示
                 this.curUrls.set(t.id, (u === 'about:blank' || u.startsWith('data:')) ? BLANK : u);
+                if (t.id === this.active) {
+                  this.syncUrlBox();
+                }
               })
               .onPageEnd((event: OnPageEndEvent) => {
                 const u: string = event.url;
@@ -314,11 +334,11 @@ struct Index {
         }
         .layoutWeight(1)
         .width('100%')
-        .backgroundColor(BLACK)
+        .backgroundColor(this.bg())
       }
       .width('100%')
       .height('100%')
-      .backgroundColor(BLACK)
+      .backgroundColor(this.bg())
 
       // ---------- 浮层搜索框 ----------
       // 位置：从屏幕底部往上 61.8%（= 从顶部往下 38.2%）的黄金分割点，左右居中。
@@ -328,13 +348,13 @@ struct Index {
         TextInput({ text: this.urlText, placeholder: '搜索或输入网址' })
           .layoutWeight(1)
           .fontSize(14)
-          .fontColor(FG)
-          .placeholderColor(DIM)
+          .fontColor(this.fg())
+          .placeholderColor(this.sub())
           .placeholderFont({ size: 14 })
           .backgroundColor(Color.Transparent)
           .borderRadius(0)
           .padding({ left: 18, right: 18 })
-          .caretColor(FG)
+          .caretColor(this.fg())
           .enterKeyType(EnterKeyType.Go)
           .onChange((value: string) => {
             this.urlText = value;
@@ -345,11 +365,13 @@ struct Index {
       }
       .width('86%')
       .height(50)
-      .backgroundColor(BLACK)
+      .backgroundColor(this.bg())
       .borderRadius(25)
       .borderWidth(1)
-      .borderColor('#FF7A7A7A')
+      .borderColor(this.line())
       .position({ x: '7%', y: this.searchTop })
+      // 只在空白起始页常驻；浏览网页时收起，不再悬浮挡住页面内容
+      .visibility(this.urlBoxVisible ? Visibility.Visible : Visibility.None)
 
       if (this.showPanel) {
         this.panelView()
@@ -360,8 +382,8 @@ struct Index {
       if (this.toastText.length > 0) {
         Text(this.toastText)
           .fontSize(13)
-          .fontColor(FG)
-          .backgroundColor(BLACK)
+          .fontColor(this.fg())
+          .backgroundColor(this.bg())
           .borderRadius(6)
           .padding({ left: 18, right: 18, top: 10, bottom: 10 })
           .margin({ bottom: 90 })
@@ -372,7 +394,7 @@ struct Index {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(BLACK)
+    .backgroundColor(this.bg())
   }
 
   // ------------------------------------------------------------------ 标签页
@@ -397,6 +419,7 @@ struct Index {
     this.active = id;
     this.urlText = url;
     this.showPanel = false;
+    this.syncUrlBox();
   }
 
   private selectTab(id: number): void {
@@ -404,6 +427,7 @@ struct Index {
     const live: string | undefined = this.curUrls.get(id);
     this.urlText = (live === undefined || live === BLANK) ? '' : live;
     this.showPanel = false;
+    this.syncUrlBox();
   }
 
   private closeTab(id: number): void {
@@ -448,6 +472,17 @@ struct Index {
 
   // ------------------------------------------------------------------ 导航
 
+  /** 当前活动标签页是否为空白起始页 */
+  private activeIsBlank(): boolean {
+    const live: string | undefined = this.curUrls.get(this.active);
+    return live === undefined || live === BLANK;
+  }
+
+  /** 浮层搜索框跟随活动标签页：空白起始页显示，浏览网页收起 */
+  private syncUrlBox(): void {
+    this.urlBoxVisible = this.activeIsBlank();
+  }
+
   private go(input: string): void {
     let url: string = input.trim();
     if (url.length === 0) {
@@ -465,6 +500,7 @@ struct Index {
       ctrl.loadUrl(url);
       this.urlText = url;
       this.curUrls.set(this.active, url);
+      this.syncUrlBox();
     } catch (error) {
       const err = error as BusinessError;
       this.toast('加载失败：' + err.message);
@@ -499,8 +535,50 @@ struct Index {
     return false;
   }
 
+  // ------------------------------------------------------------------ 主题
+
+  /**
+   * 一个 @State darkOn 同时决定两件事：
+   * 开 = 纯黑主题（App 界面全黑 + 网页反相成黑），关 = 浅色主题（白底黑字 + 网页保持原色）。
+   * 下面几个方法在 build() 里被读到，darkOn 一变就会重算并刷新相关组件。
+   */
+  private bg(): string {
+    return this.darkOn ? BLACK : WHITE;
+  }
+
+  private fg(): string {
+    return this.darkOn ? FG : FG_LIGHT;
+  }
+
+  /** 次要文字：提示、占位符 */
+  private sub(): string {
+    return this.darkOn ? DIM : DIM_LIGHT;
+  }
+
+  /** 搜索框描边：比底色深一档 */
+  private line(): string {
+    return this.darkOn ? '#FF7A7A7A' : LINE_LIGHT;
+  }
+
+  /** 系统栏 / 窗口底色的文字色 */
+  private barFg(): string {
+    return this.darkOn ? '#FFFFFFFF' : '#FF000000';
+  }
+
+  /**
+   * 空白新标签页的内联 HTML。它的底必须跟着主题走 —— 空白页不注入反相，
+   * 底色就是它看到的全部，写死纯黑的话切到浅色主题时这一页会明显"没反应"。
+   */
+  private blankHtml(): string {
+    const bg: string = this.darkOn ? '#000' : '#fff';
+    return '<html style="background:' + bg + '">' +
+      '<head><meta name="viewport" content="width=device-width,initial-scale=1"></head>' +
+      '<body style="background:' + bg + ';margin:0;height:100%"></body></html>';
+  }
+
   // ------------------------------------------------------------------ 强制纯黑
 
+  /** 黑白主题切换：App 界面 + 系统栏 + 空白页底色 + 网页侧强制纯黑，一起切 */
   private toggleDark(): void {
     this.darkOn = !this.darkOn;
     for (const t of this.tabs) {
@@ -509,17 +587,42 @@ struct Index {
         continue;
       }
       const live: string | undefined = this.curUrls.get(t.id);
-      const blank: boolean = live === undefined || live === BLANK;
-      // 空白页不注入反相：它的底本来就是纯黑，invert 会翻成整片白
-      if (blank && this.darkOn) {
+      if (live === undefined || live === BLANK) {
+        // 空白页没有内容可反相，重灌一份跟着主题走的空白 HTML 就够了
+        try {
+          ctrl.loadData(this.blankHtml(), 'text/html', 'UTF-8');
+        } catch (error) {
+          hilog.warn(0, TAG, 'repaint blank tab %{public}d failed', t.id);
+        }
         continue;
       }
+      // 注入 / 摘除同一份脚本，不整页 reload —— 保留滚动位置和表单状态
       try {
         ctrl.runJavaScript(this.darkOn ? JS_DARK : JS_DARK_OFF);
       } catch (error) {
         hilog.warn(0, TAG, 'toggle dark failed for tab %{public}d', t.id);
       }
     }
+    this.syncSystemBars();
+  }
+
+  /** 状态栏 / 导航栏 / 窗口底色跟着主题走 —— 它们在 EntryAbility 里只在启动时设过一次 */
+  private syncSystemBars(): void {
+    const host: common.UIAbilityContext | undefined = this.hostContext();
+    if (host === undefined) {
+      return;
+    }
+    window.getLastWindow(host).then((win: window.Window) => {
+      win.setWindowBackgroundColor(this.bg());
+      return win.setWindowSystemBarProperties({
+        statusBarColor: this.bg(),
+        statusBarContentColor: this.barFg(),
+        navigationBarColor: this.bg(),
+        navigationBarContentColor: this.barFg()
+      });
+    }).catch((error: BusinessError) => {
+      hilog.warn(0, TAG, 'sync system bars failed: %{public}s', error.message);
+    });
   }
 
   private paint(id: number): void {
@@ -549,11 +652,11 @@ struct Index {
     if (ctrl === undefined) {
       return;
     }
-    // 空白标签页：about:blank 是白底，换成自带纯黑背景的内联 HTML
+    // 空白标签页：about:blank 是白底，换成自带主题背景的内联 HTML
     const live: string | undefined = this.curUrls.get(id);
     if (live === undefined || live === BLANK) {
       try {
-        ctrl.loadData(BLANK_HTML, 'text/html', 'UTF-8');
+        ctrl.loadData(this.blankHtml(), 'text/html', 'UTF-8');
         this.curUrls.set(id, BLANK);
       } catch (error) {
         hilog.warn(0, TAG, 'load blank html failed');
@@ -789,14 +892,14 @@ struct Index {
     Column() {
       Text('标签页  ' + this.tabs.length)
         .fontSize(12)
-        .fontColor(DIM)
+        .fontColor(this.sub())
         .width('100%')
         .padding({ left: 24, right: 24, top: 8, bottom: 12 })
 
       ForEach(this.tabs, (t: TabInfo) => {
         Text((t.id === this.active ? '●  ' : '○  ') + this.ellipsis(t.title))
           .fontSize(15)
-          .fontColor(t.id === this.active ? '#FFFFFFFF' : '#FF9A9A9A')
+          .fontColor(t.id === this.active ? this.fg() : '#FF9A9A9A')
           .width('100%')
           .padding(16)
           .onClick(() => {
@@ -809,7 +912,7 @@ struct Index {
 
       Text('＋  新建标签页')
         .fontSize(15)
-        .fontColor(FG)
+        .fontColor(this.fg())
         .width('100%')
         .padding(16)
         .onClick(() => {
@@ -818,7 +921,7 @@ struct Index {
 
       Text('↓  下载内容（' + this.downloads.length + '）')
         .fontSize(15)
-        .fontColor(FG)
+        .fontColor(this.fg())
         .width('100%')
         .padding(16)
         .onClick(() => {
@@ -837,15 +940,16 @@ struct Index {
 
       Text('长按列表项可直接关闭该标签页')
         .fontSize(11)
-        .fontColor(DIM)
+        .fontColor(this.sub())
         .width('100%')
         .padding({ left: 24, right: 24, top: 12, bottom: 4 })
     }
     .width('88%')
-    .backgroundColor(BLACK)
+    .backgroundColor(this.bg())
     .padding(8)
     .borderRadius(12)
-    .margin({ bottom: 120 })
+    // 定位到左上角三个点按钮的正下方：Stack 底部对齐的默认布局改成绝对定位
+    .position({ x: '6%', y: 52 })
   }
 
   @Builder
@@ -853,7 +957,7 @@ struct Index {
     Column() {
       Text('下载内容  ' + this.downloads.length)
         .fontSize(12)
-        .fontColor(DIM)
+        .fontColor(this.sub())
         .width('100%')
         .padding({ left: 24, right: 24, top: 8, bottom: 12 })
 
@@ -868,7 +972,7 @@ struct Index {
       ForEach(this.downloads, (r: DownloadRec) => {
         Text((r.done ? '✓  ' : '↓  ') + this.ellipsis(r.name))
           .fontSize(15)
-          .fontColor(r.done ? FG : '#FF9A9A9A')
+          .fontColor(r.done ? this.fg() : '#FF9A9A9A')
           .width('100%')
           .padding(16)
           .onClick(() => {
@@ -880,12 +984,12 @@ struct Index {
 
       Text('✓ 的项点一下可以再另存到本地')
         .fontSize(11)
-        .fontColor(DIM)
+        .fontColor(this.sub())
         .width('100%')
         .padding({ left: 24, right: 24, top: 12, bottom: 4 })
     }
     .width('88%')
-    .backgroundColor(BLACK)
+    .backgroundColor(this.bg())
     .padding(8)
     .borderRadius(12)
     .margin({ bottom: 120 })
