@@ -11,7 +11,7 @@ android {
         minSdk 21
         targetSdk 28
         versionCode 4
-        versionName '2.3-beta'
+        versionName '2.3'
     }
 
     // 沿用原有目录结构，不迁移成标准 src/main 布局

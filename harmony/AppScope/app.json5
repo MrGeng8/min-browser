@@ -3,7 +3,7 @@
     "bundleName": "com.mrgeng.minbrowser",
     "vendor": "mrgeng",
     "versionCode": 2300000,
-    "versionName": "2.3.0-beta",
+    "versionName": "2.3.0",
     "icon": "$media:app_icon",
     "label": "$string:app_name"
   }
