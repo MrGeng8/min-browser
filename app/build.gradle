@@ -10,8 +10,8 @@ android {
         applicationId 'com.blk.min'
         minSdk 21
         targetSdk 28
-        versionCode 3
-        versionName '2.2'
+        versionCode 4
+        versionName '2.3-beta'
     }
 
     // 沿用原有目录结构，不迁移成标准 src/main 布局
@@ -46,5 +46,10 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_11
         targetCompatibility JavaVersion.VERSION_11
+    }
+
+    lint {
+        // targetSdk 28 是刻意为之（下载行为差异），不上架 Google Play，直接分发 APK
+        disable 'ExpiredTargetSdkVersion'
     }
 }
